@@ -1,0 +1,236 @@
+2021 Mar 09
+
+The python code is made up of code I've been writing for use
+replacing/updating existing components of my standard reduction
+pipeline. I figured that I could try them out on the GODO data as a
+test.
+
+combine_fits.py - image combination tool
+img_arith.py - image arithmetic tool
+img_log.py - image header data extraction for logging
+img_rename.py - image renaming
+img_stats.py - image statistics tool
+
+reduc_utils.py - support utilities
+reduc_fits_utils.py - FITS specific support utilities
+
+display_fits.py - gratuitous simple display utility
+
+All are written in python3 using the following packages:
+ argparse
+ astropy.io.fits
+ datetime
+ dateutil
+ glob
+ json
+ math
+ matplotlib
+ numpy
+ operator
+ os
+ scipy
+ socket
+ sys
+ urllib
+
+Test reduction of Crab Neb images from the data from 
+2021 Feb 26 (aka 20210227 UT)
+----------------------------------
+
+Done by hand mostly as test of concept. In particular, getting all the
+checks on which files should be grouped is something that would be
+much more easily done in python instead of by hand.
+
+
+Initial reduction steps:
+
+1) Rename all FITS files into single monotonic sequence, sorted in
+   time.  With no -o argument, it will set the default root filename
+   to the date part of the first image read in.  Default sort order is
+   by DATE-OBS.
+
+./img_rename.py '*.fit' 
+
+2) Construct log from the headers
+
+./img_log.py '*.fit' -o HEADER_LOG -k \
+'Filename,OBJECT,FILTER,IMAGETYP,DATE-OBS,EXPTIME,NAXIS1,NAXIS2,\
+XBINNING,READOUTM,ISOSPEED,EGAIN,CCD-TEMP'
+
+3) Construct mean bias - (TBD) 
+   Get bias frame info:
+     egrep "#|Bias" HEADER_LOG | awk '{print $1,$7,$8,$9,$10,$11}'
+   Make sure they all agree, else make multiple biases for each setup.
+
+./combine_fits.py \
+'20210227.004[1-9].fit,20210227.0050.fit,20210227.009[89].fit,20210227.010[0-7].fit'\
+-m mean -o mean_bias.fit
+
+4) Subtract mean bias from all the rest of the images
+./img_arith.py \
+'20210227.00[0123]?.fit,20210227.0040.fit,20210227.005[1-9].fit' \
+- mean_bias.fit -o bsub
+
+./img_arith.py \
+'20210227.00[678]?.fit,20210227.009[0-7].fit' \
+- mean_bias.fit -o bsub
+
+5) Construct mean darks - (TBD)
+   Get dark frame info:
+     egrep "#|Dark" HEADER_LOG | awk '{print $1,$6,$7,$8,$9,$10,$11}'
+   Make sure they all agree, else make multiple darks for each setup.
+
+Check dark frame stats before combining - use central region [600:1100, 400:700]
+./img_stats.py 'bsub.005[1-9].fit,bsub.006[01].fit' -b 600 1100 400 700 -o raw_dark_stats.log
+
+Something is odd with 0051 - don't use
+
+./combine_fits.py 'bsub.005[2-6].fit' -m mean -o mean_dark60.fit
+./combine_fits.py 'bsub.005[78].fit' -m mean -o mean_dark120.fit
+./combine_fits.py 'bsub.0059.fit,bsub.006[01].fit' -m mean -o mean_dark180.fit
+
+6) Check dark counts vs time
+./img_stats.py 'mean*fit' -b 600 1100 400 700 -o dark_stats.log
+
+Fit: Counts = Offset + Slope * ExpTime
+
+: set ExpTime = < 60 120 180 >
+: set Counts = < 11.8 17.8 23.6 >
+Counts = Offset + Slope * ExpTime
+Offset = 5.933 +/- 1.528
+Slope  = 0.098 +/- 0.012
+npts = 3 
+
+Dark current: zero point = 5.9 cts
+Slope = 0.098 cts/sec
+
+Use that fit to rescale the 180sec mean dark to any given exposure time:
+y == dark image
+x == exp time
+
+y = Offset + b * Slope
+
+y0 = Offset + Slope * x0
+y1 = Offset + Slope * x1
+
+y1/y0 = (Offset + Slope * x1) / (Offset + Slope * x0)
+
+y1 = (Offset + Slope * x1) / (Offset + Slope * x0) * y0
+
+e.g.:
+Offset = 5.9
+Slope  = 0.098
+x0     = 180
+
+x1 = 1
+  y1 = y0 * (5.9 + 0.098 * 1) / (5.9 + 0.098 * 180) = 0.25
+x1 = 60
+  y1 = y0 * (5.9 + 0.098 * 60) / (5.9 + 0.098 * 180) = 0.50
+x1 = 120
+  y1 = y0 * (5.9 + 0.098 * 120) / (5.9 + 0.098 * 180) = 0.75
+
+So, dark scaling factor is:
+    (Offset + Slope * x1) / (Offset + Slope * x0)
+If using the mean_dark180 as baseline, then:
+    (5.9 + 0.098 * EXPTIME) / (5.9 + 0.098 * 180)
+
+7) Create darks for flat subtraction - scale mean_dark180 by flat exp
+   times for 1,2,5,10 seconds
+
+  sf = (5.9 + 0.098 * EXPTIME) / (5.9 + 0.098 * 180)
+
+  EXPTIME     sf
+   1	      0.25
+   2	      0.26
+   5	      0.27
+  10	      0.29
+
+./img_arith.py mean_dark180.fit x 0.25 -o dark1sec.fit
+./img_arith.py mean_dark180.fit x 0.26 -o dark2sec.fit
+./img_arith.py mean_dark180.fit x 0.27 -o dark5sec.fit
+./img_arith.py mean_dark180.fit x 0.29 -o dark10sec.fit
+
+8) Subtract darks from bias subtracted flats
+
+egrep "#|Flat" HEADER_LOG | awk '{print $1,$3,$6}'
+
+./img_arith.py 'bsub.000[1-5].fit' - dark2sec.fit -o dbsub
+./img_arith.py 'bsub.000[6-9].fit,bsub.0010.fit' - dark5sec.fit -o dbsub
+./img_arith.py 'bsub.001[1-5].fit' - dark10sec.fit -o dbsub
+./img_arith.py 'bsub.001[6-9].fit,bsub.00[23]?.fit,bsub.0040.fit' - dark1sec.fit -o dbsub
+
+9) Make mean flats - to avoid star bleed through, will need to
+   normalize and clip
+
+E.g. if you weight each flat image by its mean during combination:
+
+./combine_fits.py -m average -a mean 'dbsub.000[1-5].fit' -o oiii_mean_flat.fit
+./combine_fits.py -m average -a mean 'dbsub.000[6-9].fit,dbsub.0010.fit' -o sii_mean_flat.fit
+./combine_fits.py -m average -a mean 'dbsub.001[1-5].fit' -o halpha_mean_flat.fit
+./combine_fits.py -m average -a mean 'dbsub.001[6-9].fit,dbsub.0020.fit' -o red_mean_flat.fit
+./combine_fits.py -m average -a mean 'dbsub.002[1-5].fit' -o green_mean_flat.fit
+./combine_fits.py -m average -a mean 'dbsub.002[6-9].fit,dbsub.0030.fit' -o blue_mean_flat.fit
+./combine_fits.py -m average -a mean 'dbsub.003[1-5].fit' -o lumin_mean_flat.fit
+./combine_fits.py -m average -a mean 'dbsub.003[6-9].fit,dbsub.0040.fit' -o open_mean_flat.fit
+
+Star trails bled through on the mean images.  Same for median combining:
+
+./combine_fits.py -m median 'dbsub.000[1-5].fit' -o oiii_median_flat.fit
+./combine_fits.py -m median 'dbsub.000[6-9].fit,dbsub.0010.fit' -o sii_median_flat.fit
+./combine_fits.py -m median 'dbsub.001[1-5].fit' -o halpha_median_flat.fit
+./combine_fits.py -m median 'dbsub.001[6-9].fit,dbsub.0020.fit' -o red_median_flat.fit
+./combine_fits.py -m median 'dbsub.002[1-5].fit' -o green_median_flat.fit
+./combine_fits.py -m median 'dbsub.002[6-9].fit,dbsub.0030.fit' -o blue_median_flat.fit
+./combine_fits.py -m median 'dbsub.003[1-5].fit' -o lumin_median_flat.fit
+./combine_fits.py -m median 'dbsub.003[6-9].fit,dbsub.0040.fit' -o open_median_flat.fit
+
+Some still bleed through.
+
+OK, so try this.  It generates a median flat, where the input images
+are all normalized to the same mean flux level (-n mean) as the first,
+and then the 1 max value for each pixel is clipped (-c max -d 1)
+before finally computing the median of the stack (-m median), and then
+that is normalized to unit mean (-u) before being written out.
+
+./combine_fits.py -m median -c max -d 1 -n mean -u 'dbsub.000[1-5].fit' -o oiii_flat.fit
+./combine_fits.py -m median -c max -d 1 -n mean -u 'dbsub.000[6-9].fit,dbsub.0010.fit' -o sii_flat.fit
+./combine_fits.py -m median -c max -d 1 -n mean -u 'dbsub.001[1-5].fit' -o halpha_flat.fit
+./combine_fits.py -m median -c max -d 1 -n mean -u 'dbsub.001[6-9].fit,dbsub.0020.fit' -o red_flat.fit
+./combine_fits.py -m median -c max -d 1 -n mean -u 'dbsub.002[1-5].fit' -o green_flat.fit
+./combine_fits.py -m median -c max -d 1 -n mean -u 'dbsub.002[6-9].fit,dbsub.0030.fit' -o blue_flat.fit
+./combine_fits.py -m median -c max -d 1 -n mean -u 'dbsub.003[1-5].fit' -o lumin_flat.fit
+./combine_fits.py -m median -c max -d 1 -n mean -u 'dbsub.003[6-9].fit,dbsub.0040.fit' -o open_flat.fit
+
+That works.
+
+10) Apply dark to each light image
+
+./img_arith.py 'bsub.006[2-9].fit,bsub.007[0-3].fit' - mean_dark60.fit -o dbsub
+./img_arith.py 'bsub.007[48].fit,bsub.0082.fit' - mean_dark120.fit -o dbsub
+./img_arith.py 'bsub.007[5679].fit,bsub.008[013-9].fit' - mean_dark180.fit -o dbsub
+
+
+11) Apply appropriate flat to each light image.
+
+./img_arith.py 'dbsub.006[234].fit,dbsub.007[48].fit,dbsub.0082.fit' / lumin_flat.fit -o fdb
+./img_arith.py 'dbsub.006[567].fit,dbsub.007[59].fit,dbsub.0083.fit' / red_flat.fit -o fdb
+./img_arith.py 'dbsub.006[89].fit,dbsub.007[06].fit,dbsub.008[04].fit' / green_flat.fit -o fdb
+./img_arith.py 'dbsub.007[1237].fit,dbsub.008[15].fit' / blue_flat.fit -o fdb
+./img_arith.py 'dbsub.008[678].fit' / halpha_flat.fit -o fdb
+
+12) Combine each color set:
+
+Cluster
+
+./combine_fits.py 'fdb.006[234].fit' -m mean -o cluster_lumin.fit
+./combine_fits.py 'fdb.006[567].fit' -m mean -o cluster_red.fit
+./combine_fits.py 'fdb.006[89].fit,fdb.0070.fit' -m mean -o cluster_green.fit
+./combine_fits.py 'fdb.007[123].fit' -m mean -o cluster_blue.fit
+
+
+Crab
+./combine_fits.py 'fdb.007[48].fit,fdb.0082.fit' -m mean -o crab_lumin.fit
+./combine_fits.py 'fdb.007[59].fit,fdb.0083.fit' -m mean -o crab_red.fit
+./combine_fits.py 'fdb.0076.fit,fdb.008[04].fit' -m mean -o crab_green.fit
+./combine_fits.py 'fdb.0077.fit,fdb.008[15].fit' -m mean -o crab_blue.fit
+

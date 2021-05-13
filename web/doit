@@ -1,0 +1,10 @@
+python3 fitsToThumb.py ../../data/UT20210420
+python3 fitsToThumb.py ../../data/UT20210421
+python3 fitsToThumb.py ../../data/UT20210331
+python3 fitsToThumb.py ../../data/UT20210323
+python3 fitsToThumb.py ../../data/UT20210320
+python3 fitsToThumb.py ../../data/UT20210317
+python3 fitsToThumb.py ../../data/UT20210309
+python3 fitsToThumb.py ../../data/UT20210227
+python3 fitsToThumb.py ../../data/UT20210226
+python3 fitsToThumb.py ../../data/UT20210225
