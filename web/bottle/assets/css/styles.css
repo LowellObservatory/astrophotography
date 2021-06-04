@@ -94,5 +94,11 @@ footer {
     left: 30px;
 }
 
+.img {
+    float: left;
+    width:  800px;
+    height: 800px;
+    background-size: cover;
+}
 
 

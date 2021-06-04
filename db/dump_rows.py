@@ -8,7 +8,7 @@ except Error as e:
   print(e)
 
 cur = conn.cursor()
-date = "2021-03-09"
+date = "2021-05-29"
 cur.execute("SELECT exptime,dateobs FROM images  \
                  where dateobs >= date(?) \
                  and dateobs <  date(?, '+1 day') limit 100 ",(date, date,))

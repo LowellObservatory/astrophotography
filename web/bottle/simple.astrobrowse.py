@@ -12,11 +12,19 @@ def server_static(filepath):
 def server_static(filepath):
     return static_file(filepath, root='./assets')
 
+@route('/astrobrowse/color')
+def show_color():
+    # Get a list of the color images.
+    colorlist = [f for f in listdir("data/color")]
+    # Pass list to html template and return result.
+    output = template('templates/color', url=url, colorlist=colorlist)
+    return output
+
 @route('/astrobrowse')
 @route('/astrobrowse/<date>')
 def astro_browse(date='UT20210227'):
     # Get a list of the daily directories.
-    onlydirs = [f for f in listdir("data") if isdir(join("data", f))]
+    onlydirs = [f for f in listdir("data") if (isdir(join("data", f)) and f != "color")]
     onlydirs.sort()
     # move this date to the top of the list.
     onlydirs.insert(0, onlydirs.pop(onlydirs.index(date)))

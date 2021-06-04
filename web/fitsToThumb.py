@@ -26,7 +26,7 @@ if __name__ == "__main__":
     hdul.close()
 
     base = os.path.splitext(file)[0]
-    v_min, v_max = np.percentile(image_data, (0.2, 98.0))
+    v_min, v_max = np.percentile(image_data, (0.2, 99.5))
     image_data = rescale_intensity(image_data, in_range=(v_min, v_max),
         out_range=(0, 256))
     fraction = 300./width
